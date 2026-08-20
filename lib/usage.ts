@@ -3,12 +3,19 @@ import path from 'path';
 
 export const DAILY_LIMIT_PER_KEY = Number(process.env.DAILY_EXTRACTION_LIMIT || 1500);
 
-export const API_KEYS: string[] = [
-  process.env.GEMINI_API_KEY,
-  process.env.backup_GEMINI_API_KEY || process.env.BACKUP_GEMINI_API_KEY
-].filter((k): k is string => Boolean(k && k.trim()));
+// Resolved on demand rather than at import time: under ESM the imports of this
+// module are evaluated before dotenv.config() runs in the dev server, so reading
+// process.env eagerly would capture an empty environment.
+export function getApiKeys(): string[] {
+  return [
+    process.env.GEMINI_API_KEY,
+    process.env.backup_GEMINI_API_KEY || process.env.BACKUP_GEMINI_API_KEY
+  ].filter((k): k is string => Boolean(k && k.trim()));
+}
 
-export const keyCount = Math.max(API_KEYS.length, 1);
+export function getKeyCount(): number {
+  return Math.max(getApiKeys().length, 1);
+}
 
 const USAGE_FILE = path.join(process.env.VERCEL ? '/tmp' : process.cwd(), '.noon-usage.json');
 
@@ -22,8 +29,8 @@ const ptDateKey = (d: Date = new Date()) => d.toLocaleDateString('en-CA', { time
 
 const emptyUsage = (): UsageState => ({
   date: ptDateKey(),
-  used: Array(keyCount).fill(0),
-  exhausted: Array(keyCount).fill(false)
+  used: Array(getKeyCount()).fill(0),
+  exhausted: Array(getKeyCount()).fill(false)
 });
 
 function loadUsage(): UsageState {
@@ -31,8 +38,10 @@ function loadUsage(): UsageState {
     const raw = JSON.parse(fs.readFileSync(USAGE_FILE, 'utf-8'));
     if (raw?.date === ptDateKey() && Array.isArray(raw.used)) {
       const fresh = emptyUsage();
-      raw.used.slice(0, keyCount).forEach((n: number, i: number) => (fresh.used[i] = Number(n) || 0));
-      (raw.exhausted || []).slice(0, keyCount).forEach((b: boolean, i: number) => (fresh.exhausted[i] = !!b));
+      raw.used.slice(0, fresh.used.length).forEach((n: number, i: number) => (fresh.used[i] = Number(n) || 0));
+      (raw.exhausted || [])
+        .slice(0, fresh.exhausted.length)
+        .forEach((b: boolean, i: number) => (fresh.exhausted[i] = !!b));
       return fresh;
     }
   } catch {
@@ -55,6 +64,12 @@ export function ensureUsageFresh() {
   if (usage.date !== ptDateKey()) {
     usage = emptyUsage();
     saveUsage();
+    return;
+  }
+  // The counters may have been sized before the environment was populated.
+  while (usage.used.length < getKeyCount()) {
+    usage.used.push(0);
+    usage.exhausted.push(false);
   }
 }
 
@@ -82,7 +97,7 @@ export function remainingExtractions(): number {
 export function getUsagePayload() {
   return {
     remaining: remainingExtractions(),
-    dailyLimit: DAILY_LIMIT_PER_KEY * keyCount,
+    dailyLimit: DAILY_LIMIT_PER_KEY * getKeyCount(),
     resetAtIso: nextQuotaReset().toISOString()
   };
 }

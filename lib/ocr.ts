@@ -1,7 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import {
-  API_KEYS,
-  keyCount,
+  getApiKeys,
+  getKeyCount,
   remainingExtractions,
   nextQuotaReset,
   recordSuccess,
@@ -18,7 +18,7 @@ function getGenAI(keyIndex: number): GoogleGenAI {
     clientCache.set(
       keyIndex,
       new GoogleGenAI({
-        apiKey: API_KEYS[keyIndex] || 'dummy-key',
+        apiKey: getApiKeys()[keyIndex] || 'dummy-key',
         httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
       })
     );
@@ -37,8 +37,29 @@ const isTransientError = (s: string) =>
   s.includes('504') ||
   /high demand|overloaded/i.test(s);
 
+// A stalled key must not swallow the whole serverless budget, otherwise the
+// platform kills the function before any fallback key is ever tried.
+const ATTEMPT_TIMEOUT_MS = Number(process.env.GEMINI_ATTEMPT_TIMEOUT_MS || 20000);
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Request timed out after ${ms}ms`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
 async function generateWithFailover(requestParams: { contents: any; config?: any }) {
   const models = ['gemini-3.7-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
+  const keyCount = getKeyCount();
   let lastError: any = null;
 
   for (const model of models) {
@@ -48,11 +69,14 @@ async function generateWithFailover(requestParams: { contents: any; config?: any
       for (let k = 0; k < keyCount; k++) {
         const keyIdx = (activeKeyIndex + k) % keyCount;
         try {
-          const response = await getGenAI(keyIdx).models.generateContent({
-            model,
-            contents: requestParams.contents,
-            config: requestParams.config
-          });
+          const response = await withTimeout(
+            getGenAI(keyIdx).models.generateContent({
+              model,
+              contents: requestParams.contents,
+              config: requestParams.config
+            }),
+            ATTEMPT_TIMEOUT_MS
+          );
           if (keyIdx !== activeKeyIndex) {
             console.warn(`[Noon OCR] Switched to key #${keyIdx + 1}`);
             activeKeyIndex = keyIdx;
@@ -102,6 +126,16 @@ export async function extractArabicText(body: {
       json: {
         error: 'Missing fileData',
         message: 'Provide base64 image or PDF data in the fileData field.'
+      }
+    };
+  }
+
+  if (getApiKeys().length === 0) {
+    return {
+      status: 503,
+      json: {
+        error: 'Not configured',
+        message: 'No Gemini API key is configured on the server.'
       }
     };
   }

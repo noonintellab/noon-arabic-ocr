@@ -1,9 +1,10 @@
+// Must precede every other import so the environment is populated before any
+// module that reads it is evaluated.
+import 'dotenv/config';
+
 import express, { Request, Response } from 'express';
 import path from 'path';
-import dotenv from 'dotenv';
 import { extractArabicText, getUsagePayload } from './lib/ocr.js';
-
-dotenv.config();
 
 export async function createApp() {
   const app = express();
