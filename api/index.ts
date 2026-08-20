@@ -18,8 +18,5 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
 }
 
 export const config = {
-  maxDuration: 60,
-  api: {
-    bodyParser: false
-  }
+  maxDuration: 60
 };

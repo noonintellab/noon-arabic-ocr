@@ -1,7 +1,6 @@
 import express, { Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
-import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 
@@ -330,6 +329,7 @@ Return ONLY a JSON object with exactly these fields:
   // On Vercel the frontend is served as static files; the function only handles /api.
   if (!process.env.VERCEL) {
     if (process.env.NODE_ENV !== 'production') {
+      const { createServer: createViteServer } = await import('vite');
       const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'spa' });
       app.use(vite.middlewares);
     } else {
