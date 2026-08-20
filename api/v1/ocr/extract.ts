@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'http';
-import { extractArabicText } from '../../../lib/ocr';
+import { extractArabicText } from '../../../lib/ocr.js';
 
 function readJson(req: IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {

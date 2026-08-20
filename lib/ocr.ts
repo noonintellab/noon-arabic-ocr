@@ -6,9 +6,9 @@ import {
   nextQuotaReset,
   recordSuccess,
   recordExhausted
-} from './usage';
+} from './usage.js';
 
-export { remainingExtractions, nextQuotaReset, getUsagePayload } from './usage';
+export { remainingExtractions, nextQuotaReset, getUsagePayload } from './usage.js';
 
 let activeKeyIndex = 0;
 const clientCache = new Map<number, GoogleGenAI>();

@@ -1,7 +1,7 @@
 import express, { Request, Response } from 'express';
 import path from 'path';
 import dotenv from 'dotenv';
-import { extractArabicText, getUsagePayload } from './lib/ocr';
+import { extractArabicText, getUsagePayload } from './lib/ocr.js';
 
 dotenv.config();
 
