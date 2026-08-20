@@ -3,8 +3,12 @@
   "outputDirectory": "dist",
   "framework": "vite",
   "functions": {
+    "api/v1/usage.ts": {
+      "includeFiles": "lib/**"
+    },
     "api/v1/ocr/extract.ts": {
-      "maxDuration": 60
+      "maxDuration": 60,
+      "includeFiles": "lib/**"
     }
   }
 }
