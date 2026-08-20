@@ -68,6 +68,9 @@ async function generateWithFailover(requestParams: { contents: any; config?: any
   const models = ['gemini-3.7-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
   const keyCount = getKeyCount();
   let lastError: any = null;
+  // Quotas apply per model, so a rejection only means the key is spent once
+  // every model has turned it away.
+  const spentKeys = new Set<number>();
 
   for (const model of models) {
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -100,8 +103,10 @@ async function generateWithFailover(requestParams: { contents: any; config?: any
             k--;
             continue;
           }
-          if (isQuotaError(msg) || isAuthError(msg)) {
+          if (isAuthError(msg)) {
             await recordExhausted(keyIdx);
+          } else if (isQuotaError(msg)) {
+            spentKeys.add(keyIdx);
           } else if (isTransientError(msg)) {
             sawTransient = true;
           }
@@ -116,6 +121,7 @@ async function generateWithFailover(requestParams: { contents: any; config?: any
     }
   }
 
+  await Promise.all([...spentKeys].map(recordExhausted));
   throw lastError;
 }
 

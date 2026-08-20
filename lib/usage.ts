@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { Redis } from '@upstash/redis';
 
 export const DAILY_LIMIT_PER_KEY = Number(process.env.DAILY_EXTRACTION_LIMIT || 1500);
@@ -14,6 +15,14 @@ export function getApiKeys(): string[] {
 
 export function getKeyCount(): number {
   return Math.max(getApiKeys().length, 1);
+}
+
+// Counters are filed under a digest of the key itself rather than its position,
+// so swapping or reordering keys never makes one inherit another's tally.
+function keyTag(keyIdx: number): string {
+  const key = getApiKeys()[keyIdx];
+  if (!key) return `slot${keyIdx}`;
+  return createHash('sha256').update(key).digest('hex').slice(0, 12);
 }
 
 const ptDateKey = (d: Date = new Date()) => d.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
@@ -65,8 +74,9 @@ async function readCounters(): Promise<Counters> {
   const raw = await client.hgetall<Record<string, string | number>>(bucketKey());
   const counters: Counters = { used: [], exhausted: [] };
   for (let i = 0; i < getKeyCount(); i++) {
-    counters.used.push(Number(raw?.[`used:${i}`] ?? 0) || 0);
-    counters.exhausted.push(String(raw?.[`exh:${i}`] ?? '') === '1');
+    const tag = keyTag(i);
+    counters.used.push(Number(raw?.[`used:${tag}`] ?? 0) || 0);
+    counters.exhausted.push(String(raw?.[`exh:${tag}`] ?? '') === '1');
   }
   return counters;
 }
@@ -111,8 +121,9 @@ export async function recordSuccess(keyIdx: number): Promise<void> {
     return;
   }
   const key = bucketKey();
-  await client.hincrby(key, `used:${keyIdx}`, 1);
-  await client.hdel(key, `exh:${keyIdx}`);
+  const tag = keyTag(keyIdx);
+  await client.hincrby(key, `used:${tag}`, 1);
+  await client.hdel(key, `exh:${tag}`);
   await client.expire(key, BUCKET_TTL_SECONDS);
 }
 
@@ -123,6 +134,6 @@ export async function recordExhausted(keyIdx: number): Promise<void> {
     return;
   }
   const key = bucketKey();
-  await client.hset(key, { [`exh:${keyIdx}`]: '1' });
+  await client.hset(key, { [`exh:${keyTag(keyIdx)}`]: '1' });
   await client.expire(key, BUCKET_TTL_SECONDS);
 }
