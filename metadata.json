@@ -1,0 +1,7 @@
+{
+  "name": "Noon Arabic Precision OCR & API Engine",
+  "description": "Enterprise-grade Arabic OCR platform and developer API for high-accuracy text extraction from handwritten notes, Islamic scripts, historical manuscripts, tables, and printed Arabic documents.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
