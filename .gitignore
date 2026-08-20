@@ -1,7 +1,6 @@
 node_modules/
 build/
 dist/
-.noon-usage.json
 coverage/
 .DS_Store
 *.log

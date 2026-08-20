@@ -1,5 +1,4 @@
-import fs from 'fs';
-import path from 'path';
+import { Redis } from '@upstash/redis';
 
 export const DAILY_LIMIT_PER_KEY = Number(process.env.DAILY_EXTRACTION_LIMIT || 1500);
 
@@ -17,60 +16,59 @@ export function getKeyCount(): number {
   return Math.max(getApiKeys().length, 1);
 }
 
-const USAGE_FILE = path.join(process.env.VERCEL ? '/tmp' : process.cwd(), '.noon-usage.json');
+const ptDateKey = (d: Date = new Date()) => d.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
 
-interface UsageState {
-  date: string;
+const bucketKey = () => `noon:usage:${ptDateKey()}`;
+const BUCKET_TTL_SECONDS = 3 * 24 * 3600;
+
+let redis: Redis | null = null;
+
+// Every extraction runs in its own serverless invocation, so the counters have
+// to live outside the process to be shared. Without a store configured the
+// counters still work, but only for the lifetime of a single instance.
+function getRedis(): Redis | null {
+  if (redis) return redis;
+  const url = process.env.KV_REST_API_URL;
+  const token = process.env.KV_REST_API_TOKEN;
+  if (!url || !token) return null;
+  redis = new Redis({ url, token });
+  return redis;
+}
+
+interface Counters {
   used: number[];
+  /** Keys that are out of quota or rejected, and so contribute nothing today. */
   exhausted: boolean[];
 }
 
-const ptDateKey = (d: Date = new Date()) => d.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+const memory = new Map<string, Counters>();
 
-const emptyUsage = (): UsageState => ({
-  date: ptDateKey(),
-  used: Array(getKeyCount()).fill(0),
-  exhausted: Array(getKeyCount()).fill(false)
-});
-
-function loadUsage(): UsageState {
-  try {
-    const raw = JSON.parse(fs.readFileSync(USAGE_FILE, 'utf-8'));
-    if (raw?.date === ptDateKey() && Array.isArray(raw.used)) {
-      const fresh = emptyUsage();
-      raw.used.slice(0, fresh.used.length).forEach((n: number, i: number) => (fresh.used[i] = Number(n) || 0));
-      (raw.exhausted || [])
-        .slice(0, fresh.exhausted.length)
-        .forEach((b: boolean, i: number) => (fresh.exhausted[i] = !!b));
-      return fresh;
-    }
-  } catch {
-    // first run or unreadable file
+function memoryCounters(): Counters {
+  const key = bucketKey();
+  let entry = memory.get(key);
+  if (!entry) {
+    entry = { used: [], exhausted: [] };
+    memory.clear();
+    memory.set(key, entry);
   }
-  return emptyUsage();
+  while (entry.used.length < getKeyCount()) {
+    entry.used.push(0);
+    entry.exhausted.push(false);
+  }
+  return entry;
 }
 
-let usage: UsageState = loadUsage();
+async function readCounters(): Promise<Counters> {
+  const client = getRedis();
+  if (!client) return memoryCounters();
 
-function saveUsage() {
-  try {
-    fs.writeFileSync(USAGE_FILE, JSON.stringify(usage));
-  } catch {
-    // non-fatal
+  const raw = await client.hgetall<Record<string, string | number>>(bucketKey());
+  const counters: Counters = { used: [], exhausted: [] };
+  for (let i = 0; i < getKeyCount(); i++) {
+    counters.used.push(Number(raw?.[`used:${i}`] ?? 0) || 0);
+    counters.exhausted.push(String(raw?.[`exh:${i}`] ?? '') === '1');
   }
-}
-
-export function ensureUsageFresh() {
-  if (usage.date !== ptDateKey()) {
-    usage = emptyUsage();
-    saveUsage();
-    return;
-  }
-  // The counters may have been sized before the environment was populated.
-  while (usage.used.length < getKeyCount()) {
-    usage.used.push(0);
-    usage.exhausted.push(false);
-  }
+  return counters;
 }
 
 export function nextQuotaReset(): Date {
@@ -86,30 +84,45 @@ export function nextQuotaReset(): Date {
   return new Date(midnightToday.getTime() + 24 * 3600 * 1000);
 }
 
-export function remainingExtractions(): number {
-  ensureUsageFresh();
-  return usage.used.reduce(
-    (sum, used, i) => sum + (usage.exhausted[i] ? 0 : Math.max(0, DAILY_LIMIT_PER_KEY - used)),
+export async function remainingExtractions(): Promise<number> {
+  const { used, exhausted } = await readCounters();
+  return used.reduce(
+    (sum, count, i) => sum + (exhausted[i] ? 0 : Math.max(0, DAILY_LIMIT_PER_KEY - count)),
     0
   );
 }
 
-export function getUsagePayload() {
+export async function getUsagePayload() {
   return {
-    remaining: remainingExtractions(),
+    remaining: await remainingExtractions(),
     dailyLimit: DAILY_LIMIT_PER_KEY * getKeyCount(),
     resetAtIso: nextQuotaReset().toISOString()
   };
 }
 
-export function recordSuccess(keyIdx: number) {
-  ensureUsageFresh();
-  usage.used[keyIdx] += 1;
-  saveUsage();
+// Quota is enforced per model, so a key rejected by one model may still serve
+// another. Any success clears the flag again.
+export async function recordSuccess(keyIdx: number): Promise<void> {
+  const client = getRedis();
+  if (!client) {
+    const counters = memoryCounters();
+    counters.used[keyIdx] += 1;
+    counters.exhausted[keyIdx] = false;
+    return;
+  }
+  const key = bucketKey();
+  await client.hincrby(key, `used:${keyIdx}`, 1);
+  await client.hdel(key, `exh:${keyIdx}`);
+  await client.expire(key, BUCKET_TTL_SECONDS);
 }
 
-export function recordExhausted(keyIdx: number) {
-  ensureUsageFresh();
-  usage.exhausted[keyIdx] = true;
-  saveUsage();
+export async function recordExhausted(keyIdx: number): Promise<void> {
+  const client = getRedis();
+  if (!client) {
+    memoryCounters().exhausted[keyIdx] = true;
+    return;
+  }
+  const key = bucketKey();
+  await client.hset(key, { [`exh:${keyIdx}`]: '1' });
+  await client.expire(key, BUCKET_TTL_SECONDS);
 }

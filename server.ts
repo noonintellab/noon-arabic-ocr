@@ -1,6 +1,6 @@
 // Must precede every other import so the environment is populated before any
 // module that reads it is evaluated.
-import 'dotenv/config';
+import './lib/env.js';
 
 import express, { Request, Response } from 'express';
 import path from 'path';
@@ -27,8 +27,8 @@ export async function createApp() {
     res.json({ status: 'healthy', service: 'Noon Arabic OCR', timestamp: new Date().toISOString() });
   });
 
-  app.get('/api/v1/usage', (_req, res) => {
-    res.json(getUsagePayload());
+  app.get('/api/v1/usage', async (_req, res) => {
+    res.json(await getUsagePayload());
   });
 
   app.post('/api/v1/ocr/extract', async (req: Request, res: Response) => {

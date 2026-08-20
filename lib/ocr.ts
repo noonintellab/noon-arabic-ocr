@@ -29,6 +29,13 @@ function getGenAI(keyIndex: number): GoogleGenAI {
 export const isQuotaError = (s: string) =>
   s.includes('429') || s.includes('RESOURCE_EXHAUSTED') || /quota|exceeded|billing/i.test(s);
 
+// A key the API refuses outright is unusable, and must not keep inflating the
+// remaining-extractions figure shown to visitors.
+const isAuthError = (s: string) =>
+  s.includes('401') ||
+  s.includes('UNAUTHENTICATED') ||
+  /API key not valid|invalid authentication credentials/i.test(s);
+
 const isTransientError = (s: string) =>
   s.includes('503') ||
   s.includes('UNAVAILABLE') ||
@@ -81,7 +88,7 @@ async function generateWithFailover(requestParams: { contents: any; config?: any
             console.warn(`[Noon OCR] Switched to key #${keyIdx + 1}`);
             activeKeyIndex = keyIdx;
           }
-          recordSuccess(keyIdx);
+          await recordSuccess(keyIdx);
           return { response, modelUsed: model };
         } catch (err: any) {
           lastError = err;
@@ -93,8 +100,8 @@ async function generateWithFailover(requestParams: { contents: any; config?: any
             k--;
             continue;
           }
-          if (isQuotaError(msg)) {
-            recordExhausted(keyIdx);
+          if (isQuotaError(msg) || isAuthError(msg)) {
+            await recordExhausted(keyIdx);
           } else if (isTransientError(msg)) {
             sawTransient = true;
           }
@@ -140,7 +147,7 @@ export async function extractArabicText(body: {
     };
   }
 
-  if (remainingExtractions() <= 0) {
+  if ((await remainingExtractions()) <= 0) {
     return {
       status: 429,
       json: {
@@ -206,7 +213,7 @@ Return ONLY a JSON object with exactly these fields:
           charCount: fullText.length,
           wordCount: fullText ? fullText.split(/\s+/).filter(Boolean).length : 0
         },
-        remaining: remainingExtractions()
+        remaining: await remainingExtractions()
       }
     };
   } catch (err: any) {
